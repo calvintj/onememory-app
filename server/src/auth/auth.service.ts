@@ -3,7 +3,7 @@ import { LoginAuthDto } from './dto/login.dto';
 import { RegisterAuthDto } from './dto/register.dto';
 import { UsersService } from 'src/users/users.service';
 import * as bcrypt from 'bcrypt';
-import { UserRole } from '@prisma/client';
+import { User, UserProvider, UserRole } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
@@ -15,20 +15,51 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async register(registerAuthDto: RegisterAuthDto) {
+  async registerCredentials(registerAuthDto: RegisterAuthDto) {
     this.logger.log('Creating user', registerAuthDto);
     try {
+      const existingUser = await this.usersService.findByEmail(
+        registerAuthDto.email,
+      );
+      if (existingUser) {
+        throw new UnauthorizedException('User already exists');
+      }
+
       const hashedPassword = await bcrypt.hash(registerAuthDto.password, 10);
-      const user = await this.usersService.create({
+      const newUser = await this.usersService.create({
         email: registerAuthDto.email,
         password: hashedPassword,
         role: UserRole.USER,
+        provider: UserProvider.CREDENTIALS,
       });
-      this.logger.log('User created', user);
-      return this.login({
+
+      this.logger.log('User created', newUser);
+      return newUser;
+    } catch (error) {
+      this.logger.error('Error creating user', error);
+      throw error;
+    }
+  }
+
+  async registerOAuth(registerAuthDto: RegisterAuthDto) {
+    this.logger.log('Creating user', registerAuthDto);
+    try {
+      const existingUser = await this.usersService.findByEmail(
+        registerAuthDto.email,
+      );
+      if (existingUser) {
+        throw new UnauthorizedException('User already exists');
+      }
+
+      const newUser = await this.usersService.create({
         email: registerAuthDto.email,
-        password: registerAuthDto.password,
+        password: null,
+        role: UserRole.USER,
+        provider: UserProvider.GOOGLE,
       });
+
+      this.logger.log('User created', newUser);
+      return newUser;
     } catch (error) {
       this.logger.error('Error creating user', error);
       throw error;
@@ -37,50 +68,34 @@ export class AuthService {
 
   async login(loginAuthDto: LoginAuthDto) {
     this.logger.log('Logging in user', loginAuthDto);
-    try {
-      const user = await this.usersService.findByEmail(loginAuthDto.email);
-      if (!user) {
-        throw new UnauthorizedException('Invalid email');
-      }
+    const user = await this.validateUser(loginAuthDto.email);
 
+    if (user.provider === UserProvider.CREDENTIALS) {
       const isPasswordValid = await bcrypt.compare(
         loginAuthDto.password,
-        user.password,
+        user.password ?? '',
       );
       if (!isPasswordValid) {
         throw new UnauthorizedException('Invalid password');
       }
-
-      const payload = {
-        sub: user.id,
-        email: user.email,
-        role: user.role,
-      };
-
-      const token = this.jwtService.sign(payload);
-      return {
-        token,
-        user,
-      };
-    } catch (error) {
-      this.logger.error('Error logging in user', error);
-      throw error;
     }
+
+    return this.generateJwtToken(user);
   }
 
-  async validateUser(email: string, password: string) {
+  async generateJwtToken(user: User) {
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    const token = await this.jwtService.signAsync(payload);
+
+    return { token, user };
+  }
+
+  // Validate existing user
+  async validateUser(email: string) {
     const user = await this.usersService.findByEmail(email);
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid email');
     }
     return user;
-  }
-
-  async findByEmail(email: string) {
-    return this.usersService.findByEmail(email);
   }
 }

@@ -16,7 +16,8 @@ datasource db {
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
-  password  String
+  password  String?
+  provider  UserProvider  @default(CREDENTIALS)
   createdAt DateTime @default(now())
   entries   MemoryEntry[]
   role      UserRole @default(USER)
@@ -50,4 +51,9 @@ enum MemoryTag {
   INSPIRING
   BORING
   SURPRISING
+}
+
+enum UserProvider {
+  CREDENTIALS
+  GOOGLE
 }
